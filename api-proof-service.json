@@ -1,0 +1,65 @@
+{
+  "_type": "export",
+  "__export_format": 4,
+  "__export_date": "2026-01-28T00:00:00.000Z",
+  "__export_source": "insomnia-proof-service",
+  "resources": [
+    {
+      "_id": "wrk_proof_service",
+      "_type": "workspace",
+      "name": "Proof Service",
+      "description": "Sealium Proof Service API"
+    },
+    {
+      "_id": "env_proof_service_base",
+      "_type": "environment",
+      "parentId": "wrk_proof_service",
+      "name": "Base Environment",
+      "data": {
+        "base_url": "http://127.0.0.1:8000"
+      }
+    },
+    {
+      "_id": "fld_proof_service",
+      "_type": "request_group",
+      "parentId": "wrk_proof_service",
+      "name": "Proof Endpoints"
+    },
+    {
+      "_id": "req_proof_url",
+      "_type": "request",
+      "parentId": "fld_proof_service",
+      "name": "Create URL Proof",
+      "method": "POST",
+      "url": "{{ base_url }}/proof/url",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"url\": \"https://example.com\"\n}"
+      },
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        }
+      ]
+    },
+    {
+      "_id": "req_proof_file",
+      "_type": "request",
+      "parentId": "fld_proof_service",
+      "name": "Create File Proof",
+      "method": "POST",
+      "url": "{{ base_url }}/proof/file",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"path\": \"C:/path/to/file.txt\",\n  \"forensic_mode\": false\n}"
+      },
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        }
+      ]
+    }
+  ]
+}
