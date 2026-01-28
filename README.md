@@ -119,7 +119,7 @@ POST /proof/file
 ### Check Job Status
 
 ```
-GET /proof/status/{job_id}
+GET /proof/status?job_id=...
 ```
 
 Response when done:
@@ -132,6 +132,31 @@ Response when done:
     "case_id": "...",
     "zip_path": "...",
     "path": "..." // present only when OUTPUT_KEEP_DIR=true
+  }
+}
+```
+
+### Verify Proof (async job)
+
+```
+POST /proof/verify
+{
+  "proof_dir": "C:/path/to/case_folder"
+}
+```
+
+Response when done:
+```
+{
+  "status": "success",
+  "type": "verify",
+  "result": {
+    "status": "success",
+    "errors": 0,
+    "report_path": "...",
+    "proof_dir": "...",
+    "hashes_path": "...",
+    "zip_path": "..."
   }
 }
 ```

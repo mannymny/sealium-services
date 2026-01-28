@@ -21,7 +21,7 @@ async def test_execute_success(tmp_path):
     assert "zip_path" in result
     assert "path" in result
     mock_capture.capture.assert_called_once()
-    mock_tsa.timestamp_file.assert_called_once()
+    assert mock_tsa.timestamp_file.call_count == 2
     mock_monitor.log_error.assert_not_called()
 
 @pytest.mark.asyncio

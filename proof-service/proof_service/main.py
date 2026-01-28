@@ -5,7 +5,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from .settings import settings
 from .infrastructure.capture.playwright_adapter import PlaywrightAdapter
@@ -15,6 +15,7 @@ from .infrastructure.tsa.rfc3161_adapter import Rfc3161Adapter
 from .infrastructure.monitoring.json_monitor_adapter import JsonErrorMonitorAdapter
 from .application.use_cases.create_url_proof import CreateUrlProofUseCase
 from .application.use_cases.create_file_proof import CreateFileProofUseCase
+from .application.use_cases.verify_proof_case import VerifyProofCaseUseCase
 
 app = FastAPI(title="Proof Service DDD")
 
@@ -42,6 +43,7 @@ else:
 
 uc_url = CreateUrlProofUseCase(url_cap, tsa, monitor, str(output_root), settings.OUTPUT_KEEP_DIR)
 uc_file = CreateFileProofUseCase(file_for, tsa, monitor, str(output_root), settings.OUTPUT_KEEP_DIR)
+uc_verify = VerifyProofCaseUseCase(monitor)
 
 # In-memory job store; jobs are lost on restart.
 jobs = {}
@@ -72,12 +74,29 @@ async def _run_file_job(job_id: str, path: str, forensic_mode: bool) -> None:
     finally:
         jobs[job_id]["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
 
+async def _run_verify_job(job_id: str, proof_dir: str) -> None:
+    jobs[job_id]["status"] = "running"
+    jobs[job_id]["started_at_utc"] = datetime.now(timezone.utc).isoformat()
+    try:
+        result = await uc_verify.execute(proof_dir)
+        jobs[job_id]["status"] = "success" if result.get("status") == "success" else "error"
+        jobs[job_id]["result"] = result
+    except Exception as e:
+        jobs[job_id]["status"] = "error"
+        jobs[job_id]["error"] = str(e)
+    finally:
+        jobs[job_id]["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
+
 class UrlReq(BaseModel):
     url: str
 
 class FileReq(BaseModel):
     path: str
     forensic_mode: bool = False
+
+class VerifyReq(BaseModel):
+    proof_dir: str
+
 
 @app.post("/proof/url")
 async def create_url_proof(req: UrlReq):
@@ -93,12 +112,19 @@ async def create_file_proof(req: FileReq):
     asyncio.create_task(_run_file_job(job_id, req.path, req.forensic_mode))
     return {"status": "queued", "job_id": job_id}
 
-@app.get("/proof/status/{job_id}")
-async def get_job_status(job_id: str):
+@app.get("/proof/status")
+async def get_job_status(job_id: str = Query(..., description="Job ID to query")):
     job = jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="job_id not found")
     return job
+
+@app.post("/proof/verify")
+async def verify_proof(req: VerifyReq):
+    job_id = str(uuid4())
+    jobs[job_id] = {"status": "queued", "type": "verify", "created_at_utc": datetime.now(timezone.utc).isoformat()}
+    asyncio.create_task(_run_verify_job(job_id, req.proof_dir))
+    return {"status": "queued", "job_id": job_id}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
