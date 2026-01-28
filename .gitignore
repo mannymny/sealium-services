@@ -1,4 +1,4 @@
-# Byte-compiled / optimized / DLL files
+﻿# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
 *$py.class
@@ -147,6 +147,7 @@ venv.bak/
 # Service outputs
 logs/
 proof_output/
+transcription_output/
 
 # Spyder project settings
 .spyderproject
