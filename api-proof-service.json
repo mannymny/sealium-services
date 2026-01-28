@@ -1,4 +1,4 @@
-{
+﻿{
   "_type": "export",
   "__export_format": 4,
   "__export_date": "2026-01-28T00:00:00.000Z",
@@ -16,7 +16,8 @@
       "parentId": "wrk_proof_service",
       "name": "Base Environment",
       "data": {
-        "base_url": "http://127.0.0.1:8000"
+        "base_url": "http://127.0.0.1:8000",
+        "transcription_base_url": "http://127.0.0.1:8001"
       }
     },
     {
@@ -53,6 +54,102 @@
       "body": {
         "mimeType": "application/json",
         "text": "{\n  \"path\": \"C:/path/to/file.txt\",\n  \"forensic_mode\": false\n}"
+      },
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        }
+      ]
+    },
+    {
+      "_id": "req_proof_verify",
+      "_type": "request",
+      "parentId": "fld_proof_service",
+      "name": "Verify Proof",
+      "method": "POST",
+      "url": "{{ base_url }}/proof/verify",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"proof_dir\": \"proof-path\"\n}"
+      },
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        }
+      ]
+    },
+    {
+      "_id": "req_proof_status",
+      "_type": "request",
+      "parentId": "fld_proof_service",
+      "name": "Proof Status",
+      "method": "GET",
+      "url": "{{ base_url }}/proof/status",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"job_id\": \"job_id\"\n}"
+      },
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        }
+      ]
+    },
+    {
+      "_id": "fld_transcription_service",
+      "_type": "request_group",
+      "parentId": "wrk_proof_service",
+      "name": "Transcription Endpoints"
+    },
+    {
+      "_id": "req_transcription_url",
+      "_type": "request",
+      "parentId": "fld_transcription_service",
+      "name": "Create URL Transcription",
+      "method": "POST",
+      "url": "{{ transcription_base_url }}/transcription/url",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"url\": \"https://x.com/i/spaces/ID\",\n  \"lang\": \"es\",\n  \"cookies_from_browser\": \"chrome\"\n}"
+      },
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        }
+      ]
+    },
+    {
+      "_id": "req_transcription_file",
+      "_type": "request",
+      "parentId": "fld_transcription_service",
+      "name": "Create File Transcription",
+      "method": "POST",
+      "url": "{{ transcription_base_url }}/transcription/file",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"path\": \"C:/path/to/video.mp4\",\n  \"lang\": \"es\"\n}"
+      },
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        }
+      ]
+    },
+    {
+      "_id": "req_transcription_status",
+      "_type": "request",
+      "parentId": "fld_transcription_service",
+      "name": "Transcription Status",
+      "method": "GET",
+      "url": "{{ transcription_base_url }}/transcription/status",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"job_id\": \"job_id\"\n}"
       },
       "headers": [
         {

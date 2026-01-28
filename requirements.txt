@@ -1,4 +1,4 @@
-fastapi
+﻿fastapi
 uvicorn
 pydantic
 pydantic-settings
@@ -6,5 +6,12 @@ playwright
 requests
 asn1crypto
 aiofiles
+
+# Tests
 pytest
 pytest-asyncio
+
+# Transcription
+faster-whisper
+yt-dlp
+reportlab
