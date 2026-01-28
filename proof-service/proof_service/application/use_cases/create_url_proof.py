@@ -49,7 +49,7 @@ class CreateUrlProofUseCase:
             hashes_path = case_dir / "hashes.sha256"
             with open(hashes_path, "w") as hf:
                 for path in case_dir.glob("*"):
-                    if path.is_file():
+                    if path.is_file() and path.name != "hashes.sha256":
                         h = hash_file_sha256(path)
                         case.add_artifact(path.name, {"sha256": h})
                         hf.write(f"{h} *{path.name}\n")
@@ -65,6 +65,12 @@ class CreateUrlProofUseCase:
                     for file in files:
                         fp = Path(root) / file
                         zf.write(fp, fp.relative_to(case_dir))
+
+            zip_sha_path = (verify_dir if self.keep_dir else self.output_root) / f"{case_name}.zip.sha256.txt"
+            zip_sha = hash_file_sha256(zip_path)
+            with open(zip_sha_path, "w") as f:
+                f.write(f"sha256 = {zip_sha}\n")
+            await self.tsa.timestamp_file(str(zip_sha_path), str(zip_sha_path.parent))
 
             if not self.keep_dir and temp_dir is not None:
                 temp_dir.cleanup()
