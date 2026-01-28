@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+pydantic
+pydantic-settings
+playwright
+requests
+asn1crypto
+aiofiles
+pytest
+pytest-asyncio
