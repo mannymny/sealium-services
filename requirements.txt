@@ -1,9 +1,13 @@
 ﻿fastapi
+gunicorn
 uvicorn
 pydantic
 pydantic-settings
+python-multipart
 playwright
 requests
+redis
+rq
 asn1crypto
 aiofiles
 

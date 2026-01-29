@@ -1,141 +1,188 @@
-﻿import asyncio
-import uvicorn
-from pathlib import Path
+﻿from __future__ import annotations
+
+import json
+import shutil
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Literal
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from .settings import settings
-from .infrastructure.monitoring.json_monitor_adapter import JsonErrorMonitorAdapter
-from .infrastructure.packaging.zip_packager import ZipPackagerAdapter
-from .infrastructure.pdf.reportlab_adapter import ReportLabPdfWriterAdapter
-from .infrastructure.tools.ffmpeg_provider import ensure_ffmpeg
-from .infrastructure.tools.media_converter import FfmpegMediaConverter
-from .infrastructure.downloader.yt_dlp_adapter import YtDlpDownloaderAdapter
-from .infrastructure.transcriber.faster_whisper_adapter import FasterWhisperTranscriberAdapter
-from .application.use_cases.create_url_transcription import CreateUrlTranscriptionUseCase
-from .application.use_cases.create_file_transcription import CreateFileTranscriptionUseCase
+from .jobs.models import JobInput, JobOptions, JobState, JobTimestamps
+from .jobs.paths import JobPaths
+from .jobs.queue import QUEUE_SPLITTER, enqueue
+from .jobs.store import JobStore
+from .jobs.utils import storage_root
+from .workers.splitter import split_job
 
-app = FastAPI(title="Transcription Service DDD")
-
-BASE_DIR = Path(__file__).resolve().parents[2]
-logs_dir = Path(settings.TRANSCRIPTION_LOGS_DIR)
-output_root = Path(settings.TRANSCRIPTION_OUTPUT_ROOT)
-if not logs_dir.is_absolute():
-    logs_dir = BASE_DIR / logs_dir
-if not output_root.is_absolute():
-    output_root = BASE_DIR / output_root
-
-tools_dir = BASE_DIR / "transcription-service" / ".tools"
-
-monitor = JsonErrorMonitorAdapter(str(logs_dir / "transcription_errors.json"))
-packager = ZipPackagerAdapter()
-pdf_writer = ReportLabPdfWriterAdapter()
-
-ffmpeg, ffprobe = ensure_ffmpeg(tools_dir)
-converter = FfmpegMediaConverter(ffmpeg=ffmpeg)
-
-transcriber = FasterWhisperTranscriberAdapter(
-    ffmpeg=ffmpeg,
-    ffprobe=ffprobe,
-    model_size=settings.TRANSCRIPTION_FW_MODEL,
-    device=settings.TRANSCRIPTION_FW_DEVICE,
-    compute_type=settings.TRANSCRIPTION_FW_COMPUTE,
-)
-
-downloader = YtDlpDownloaderAdapter(ffmpeg=ffmpeg)
-
-uc_url = CreateUrlTranscriptionUseCase(
-    downloader,
-    transcriber,
-    pdf_writer,
-    packager,
-    monitor,
-    str(output_root),
-    keep_dir=settings.TRANSCRIPTION_KEEP_DIR,
-    sponsor_text=settings.TRANSCRIPTION_SPONSOR_TEXT,
-)
-
-uc_file = CreateFileTranscriptionUseCase(
-    transcriber,
-    pdf_writer,
-    packager,
-    converter,
-    monitor,
-    str(output_root),
-    keep_dir=settings.TRANSCRIPTION_KEEP_DIR,
-    sponsor_text=settings.TRANSCRIPTION_SPONSOR_TEXT,
-)
-
-jobs = {}
+app = FastAPI(title="Transcription Service Jobs")
 
 
-async def _run_url_job(job_id: str, url: str, lang: str, cookies_from_browser: str | None) -> None:
-    jobs[job_id]["status"] = "running"
-    jobs[job_id]["started_at_utc"] = datetime.now(timezone.utc).isoformat()
-    try:
-        result = await uc_url.execute(url, lang=lang, cookies_from_browser=cookies_from_browser)
-        jobs[job_id]["status"] = "success"
-        jobs[job_id]["result"] = result
-    except Exception as e:
-        jobs[job_id]["status"] = "error"
-        jobs[job_id]["error"] = str(e)
-    finally:
-        jobs[job_id]["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
-async def _run_file_job(job_id: str, path: str, lang: str) -> None:
-    jobs[job_id]["status"] = "running"
-    jobs[job_id]["started_at_utc"] = datetime.now(timezone.utc).isoformat()
-    try:
-        result = await uc_file.execute(path, lang=lang)
-        jobs[job_id]["status"] = "success"
-        jobs[job_id]["result"] = result
-    except Exception as e:
-        jobs[job_id]["status"] = "error"
-        jobs[job_id]["error"] = str(e)
-    finally:
-        jobs[job_id]["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
-
-
-class UrlReq(BaseModel):
-    url: str
-    lang: str | None = None
+class JobCreateOptions(BaseModel):
+    language: str | None = None
+    chunk_mode: Literal["silence", "vad"] | None = None
+    max_parallel_chunks: int | None = None
+    produce_vtt: bool | None = True
+    produce_json: bool | None = True
+    produce_pdf: bool | None = True
     cookies_from_browser: str | None = None
 
 
-class FileReq(BaseModel):
-    path: str
-    lang: str | None = None
+class JobCreateInput(BaseModel):
+    type: Literal["url", "path", "upload"]
+    value: str | None = None
 
 
-@app.post("/transcription/url")
-async def create_url_transcription(req: UrlReq):
+class JobCreateRequest(BaseModel):
+    input: JobCreateInput
+    options: JobCreateOptions | None = None
+
+
+class JobCreateResponse(BaseModel):
+    job_id: str
+    status: str
+    status_url: str
+    result_url: str
+
+
+def _build_options(opts: JobCreateOptions | None) -> JobOptions:
+    return JobOptions(
+        language=(opts.language if opts and opts.language else settings.TRANSCRIPTION_DEFAULT_LANG),
+        chunk_mode=(opts.chunk_mode if opts and opts.chunk_mode else settings.CHUNK_MODE),
+        max_parallel_chunks=(
+            opts.max_parallel_chunks
+            if opts and opts.max_parallel_chunks is not None
+            else settings.MAX_PARALLEL_CHUNKS
+        ),
+        produce_vtt=(opts.produce_vtt if opts and opts.produce_vtt is not None else True),
+        produce_json=(opts.produce_json if opts and opts.produce_json is not None else True),
+        produce_pdf=(opts.produce_pdf if opts and opts.produce_pdf is not None else True),
+        cookies_from_browser=(opts.cookies_from_browser if opts else None),
+    )
+
+
+def _parse_multipart_options(raw: str | None) -> JobCreateOptions | None:
+    if not raw:
+        return None
+    data = json.loads(raw)
+    return JobCreateOptions.model_validate(data)
+
+
+@app.post("/v1/transcriptions/jobs", response_model=JobCreateResponse, status_code=202)
+async def create_job(
+    payload: JobCreateRequest | None = Body(None),
+    input_type: str | None = Form(None),
+    input_value: str | None = Form(None),
+    options: str | None = Form(None),
+    file: UploadFile | None = File(None),
+):
+    if payload is None and file is None:
+        raise HTTPException(status_code=422, detail="payload or file is required")
+
+    if file is not None:
+        input_kind = "upload"
+        input_val = file.filename or "upload"
+        opts = _parse_multipart_options(options)
+    else:
+        input_kind = payload.input.type
+        input_val = payload.input.value
+        opts = payload.options
+
+    if input_kind in {"url", "path"} and not input_val:
+        raise HTTPException(status_code=422, detail="input value is required")
+
     job_id = str(uuid4())
-    jobs[job_id] = {"status": "queued", "type": "url", "created_at_utc": datetime.now(timezone.utc).isoformat()}
-    lang = req.lang or settings.TRANSCRIPTION_DEFAULT_LANG
-    asyncio.create_task(_run_url_job(job_id, req.url, lang, req.cookies_from_browser))
-    return {"status": "queued", "job_id": job_id}
+    ts = _now_iso()
+
+    job_input = JobInput(type=input_kind, value=input_val or "")
+    job_options = _build_options(opts)
+
+    state = JobState(
+        job_id=job_id,
+        status="queued",
+        timestamps=JobTimestamps(created_at=ts, updated_at=ts),
+        input=job_input,
+        options=job_options,
+    )
+
+    store = JobStore(storage_root(), redis_url=settings.REDIS_URL)
+    store.create(state)
+
+    paths = JobPaths(storage_root(), job_id)
+    if file is not None:
+        paths.input_dir.mkdir(parents=True, exist_ok=True)
+        with paths.original_mp4.open("wb") as f:
+            shutil.copyfileobj(file.file, f)
+
+    enqueue(QUEUE_SPLITTER, split_job, job_id)
+
+    return JobCreateResponse(
+        job_id=job_id,
+        status="queued",
+        status_url=f"/v1/transcriptions/jobs/{job_id}",
+        result_url=f"/v1/transcriptions/jobs/{job_id}/result",
+    )
 
 
-@app.post("/transcription/file")
-async def create_file_transcription(req: FileReq):
-    job_id = str(uuid4())
-    jobs[job_id] = {"status": "queued", "type": "file", "created_at_utc": datetime.now(timezone.utc).isoformat()}
-    lang = req.lang or settings.TRANSCRIPTION_DEFAULT_LANG
-    asyncio.create_task(_run_file_job(job_id, req.path, lang))
-    return {"status": "queued", "job_id": job_id}
-
-
-@app.get("/transcription/status")
-async def get_job_status(job_id: str = Query(..., description="Job ID to query")):
-    job = jobs.get(job_id)
+@app.get("/v1/transcriptions/jobs/{job_id}")
+async def get_job(job_id: str):
+    store = JobStore(storage_root(), redis_url=settings.REDIS_URL)
+    job = store.load(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="job_id not found")
-    return job
+    return job.model_dump()
 
 
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+@app.get("/v1/transcriptions/jobs/{job_id}/result")
+async def get_result(job_id: str):
+    store = JobStore(storage_root(), redis_url=settings.REDIS_URL)
+    job = store.load(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job_id not found")
+    if job.status != "done":
+        raise HTTPException(status_code=409, detail={"status": job.status})
+
+    return {
+        "job_id": job_id,
+        "status": job.status,
+        "result": job.result.model_dump() if job.result else None,
+        "download_url": f"/v1/transcriptions/jobs/{job_id}/download",
+    }
+
+
+@app.get("/v1/transcriptions/jobs/{job_id}/download")
+async def download_result(job_id: str):
+    store = JobStore(storage_root(), redis_url=settings.REDIS_URL)
+    job = store.load(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job_id not found")
+    if job.status != "done":
+        raise HTTPException(status_code=409, detail={"status": job.status})
+    if not job.result or not job.result.zip_path:
+        raise HTTPException(status_code=404, detail="result not found")
+
+    zip_path = Path(job.result.zip_path)
+    if not zip_path.exists():
+        raise HTTPException(status_code=404, detail="zip not found")
+
+    return FileResponse(zip_path, media_type="application/zip", filename=zip_path.name)
+
+
+@app.post("/v1/transcriptions/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str):
+    store = JobStore(storage_root(), redis_url=settings.REDIS_URL)
+    job = store.load(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job_id not found")
+    if job.status in {"done", "failed", "canceled"}:
+        return job.model_dump()
+    store.set_status(job_id, "canceled")
+    return store.load(job_id).model_dump()

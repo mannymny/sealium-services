@@ -1,0 +1,15 @@
+﻿FROM mcr.microsoft.com/playwright/python:v1.42.0-jammy
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+ENV PYTHONPATH=/app/transcription-service
+
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+COPY transcription-service /app/transcription-service
+
+CMD ["gunicorn", "-k", "uvicorn.workers.UvicornWorker", "-w", "2", "-t", "120", "-b", "0.0.0.0:8002", "transcription_service.main:app"]

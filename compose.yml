@@ -1,0 +1,94 @@
+﻿version: "3.9"
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+
+  proof-service:
+    image: sealium/proof-service:dev
+    build:
+      context: .
+      dockerfile: proof-service/Containerfile
+    env_file: .env
+    environment:
+      OUTPUT_ROOT: /data
+      LOGS_DIR: /data/logs
+    volumes:
+      - ./_data/proof:/data
+    ports:
+      - "8001:8001"
+
+  transcription-service:
+    image: sealium/transcription-service:dev
+    build:
+      context: .
+      dockerfile: transcription-service/Containerfile
+    env_file: .env
+    environment:
+      STORAGE_ROOT: /data
+      TRANSCRIPTION_LOGS_DIR: /data/logs
+      TRANSCRIPTION_OUTPUT_ROOT: /data
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./_data/transcription:/data
+    ports:
+      - "8002:8002"
+    depends_on:
+      - redis
+
+  transcription-splitter:
+    image: sealium/transcription-service:dev
+    env_file: .env
+    environment:
+      STORAGE_ROOT: /data
+      TRANSCRIPTION_LOGS_DIR: /data/logs
+      TRANSCRIPTION_OUTPUT_ROOT: /data
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./_data/transcription:/data
+    command: ["python", "-m", "transcription_service.workers.splitter"]
+    depends_on:
+      - redis
+
+  transcription-transcriber:
+    image: sealium/transcription-service:dev
+    env_file: .env
+    environment:
+      STORAGE_ROOT: /data
+      TRANSCRIPTION_LOGS_DIR: /data/logs
+      TRANSCRIPTION_OUTPUT_ROOT: /data
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./_data/transcription:/data
+    command: ["python", "-m", "transcription_service.workers.transcriber"]
+    depends_on:
+      - redis
+
+  transcription-merger:
+    image: sealium/transcription-service:dev
+    env_file: .env
+    environment:
+      STORAGE_ROOT: /data
+      TRANSCRIPTION_LOGS_DIR: /data/logs
+      TRANSCRIPTION_OUTPUT_ROOT: /data
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./_data/transcription:/data
+    command: ["python", "-m", "transcription_service.workers.merger"]
+    depends_on:
+      - redis
+
+  transcription-packager:
+    image: sealium/transcription-service:dev
+    env_file: .env
+    environment:
+      STORAGE_ROOT: /data
+      TRANSCRIPTION_LOGS_DIR: /data/logs
+      TRANSCRIPTION_OUTPUT_ROOT: /data
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./_data/transcription:/data
+    command: ["python", "-m", "transcription_service.workers.packager"]
+    depends_on:
+      - redis
