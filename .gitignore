@@ -148,6 +148,8 @@ venv.bak/
 logs/
 proof_output/
 transcription_output/
+_data/
+transcription-service/.tools/
 
 # Spyder project settings
 .spyderproject
